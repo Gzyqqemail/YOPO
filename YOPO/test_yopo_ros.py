@@ -31,7 +31,7 @@ class YopoNet:
     def __init__(self, config, weight):
         self.config = config
         rospy.init_node('yopo_net', anonymous=False)
-        # load params
+        # 加载参数
         cfg["train"] = False
         self.height = cfg['image_height']
         self.width = cfg['image_width']
@@ -45,7 +45,7 @@ class YopoNet:
         self.Rotation_bc = R.from_euler('ZYX', [0, self.config['pitch_angle_deg'], 0], degrees=True).as_matrix()
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
-        # variables
+        # 变量
         self.bridge = CvBridge()
         self.odom = Odometry()
         self.odom_init = False
@@ -66,7 +66,7 @@ class YopoNet:
         self.lattice_primitive = LatticePrimitive.get_instance()
         self.traj_time = self.lattice_primitive.segment_time
 
-        # eval
+        # 评估
         self.time_forward = 0.0
         self.time_process = 0.0
         self.time_prepare = 0.0
@@ -74,7 +74,7 @@ class YopoNet:
         self.time_visualize = 0.0
         self.count = 0
 
-        # Load Network
+        # 加载网络
         if self.use_trt:
             self.policy = TRTModule()
             self.policy.load_state_dict(torch.load(weight))
@@ -86,17 +86,17 @@ class YopoNet:
             self.policy.eval()
         self.warm_up()
 
-        # ros publisher
+        # ros 发布者
         self.lattice_traj_pub = rospy.Publisher("/yopo_net/lattice_trajs_visual", PointCloud2, queue_size=1)
         self.best_traj_pub = rospy.Publisher("/yopo_net/best_traj_visual", PointCloud2, queue_size=1)
         self.all_trajs_pub = rospy.Publisher("/yopo_net/trajs_visual", PointCloud2, queue_size=1)
         self.ctrl_pub = rospy.Publisher(self.config["ctrl_topic"], PositionCommand, queue_size=1)
-        # ros subscriber
+        # ros 订阅者
         self.odom_sub = rospy.Subscriber(self.config['odom_topic'], Odometry, self.callback_odometry, queue_size=1)
         self.depth_sub = rospy.Subscriber(self.config['depth_topic'], Image, self.callback_depth, queue_size=1)
         self.goal_sub = rospy.Subscriber("/move_base_simple/goal", PoseStamped, self.callback_set_goal, queue_size=1)
-        # ros timer
-        rospy.sleep(1.0)  # wait connection...
+        # ros 定时器
+        rospy.sleep(1.0)  # 等待连接...
         self.timer_ctrl = rospy.Timer(rospy.Duration(self.ctrl_dt), self.control_pub)
         print("YOPO Net Node Ready!")
         rospy.spin()
@@ -106,7 +106,7 @@ class YopoNet:
         self.arrive = False
         print(f"New Goal: ({data.pose.position.x:.1f}, {data.pose.position.y:.1f})")
 
-    # the first frame
+    # 第一帧
     def callback_odometry(self, data):
         self.odom = data
         if not self.desire_init:
@@ -130,13 +130,13 @@ class YopoNet:
         self.Rotation_wc = np.dot(Rotation_wb, self.Rotation_bc)
         Rotation_cw = self.Rotation_wc.T
 
-        # vel and acc
+        # 速度和加速度
         vel_w = self.desire_vel if self.plan_from_reference else np.array([self.odom.twist.twist.linear.x, self.odom.twist.twist.linear.y, self.odom.twist.twist.linear.z])
         vel_c = np.dot(Rotation_cw, vel_w)
         acc_w = self.desire_acc
         acc_c = np.dot(Rotation_cw, acc_w)
 
-        # goal_dir
+        # 目标方向
         goal_w = self.goal - self.desire_pos
         goal_c = np.dot(Rotation_cw, goal_w)
 
@@ -148,7 +148,7 @@ class YopoNet:
     def callback_depth(self, data):
         if not self.odom_init: return
 
-        # 1. Depth Image Process
+        # 1. 深度图像处理
         try:
             depth = self.bridge.imgmsg_to_cv2(data, "32FC1")
         except Exception as e1:
@@ -165,7 +165,7 @@ class YopoNet:
             depth = cv2.resize(depth, (self.width, self.height), interpolation=cv2.INTER_NEAREST)
         depth = np.minimum(depth * self.scale, self.max_dis) / self.max_dis
 
-        # interpolated the nan value (experiment shows that treating nan directly as 0 produces similar results)
+        # 插值nan值（实验表明直接将nan视为0产生类似结果）
         nan_mask = np.isnan(depth) | (depth < self.min_dis / self.max_dis)
         interpolated_image = cv2.inpaint(np.uint8(depth * 255), np.uint8(nan_mask), 1, cv2.INPAINT_NS)
         interpolated_image = interpolated_image.astype(np.float32) / 255.0
@@ -173,30 +173,30 @@ class YopoNet:
         # cv2.imshow("1", depth[0][0])
         # cv2.waitKey(1)
 
-        # 2. YOPO Network Inference
-        # input prepare
+        # 2. YOPO网络推理
+        # 输入准备
         time1 = time.time()
-        depth_input = torch.from_numpy(depth).to(self.device, non_blocking=True)  # (non_blocking: copying speed 3x)
+        depth_input = torch.from_numpy(depth).to(self.device, non_blocking=True)  # (non_blocking: 复制速度提高3倍)
         obs_norm = self.process_odom()
         obs_input = self.state_transform.prepare_input(obs_norm)
         obs_input = obs_input.to(self.device, non_blocking=True)
         # torch.cuda.synchronize()
 
         time2 = time.time()
-        # Forward (TensorRT: inference speed increased by 5x)
+        # 前向传播（TensorRT：推理速度提高5倍）
         endstate_pred, score_pred = self.policy(depth_input, obs_input)
         endstate_pred, score_pred = endstate_pred.cpu().numpy(), score_pred.cpu().numpy()
         time3 = time.time()
 
-        # 3. Post-Processing
-        # Replacing PyTorch operation on CUDA with NumPy operation on CPU (speed increased by 10x)
+        # 3. 后处理
+        # 用CPU上的NumPy操作替换CUDA上的PyTorch操作（速度提高10倍）
         endstate, score = self.process_output(endstate_pred, score_pred, return_all_preds=self.visualize)
-        # Vectorization: transform the prediction(P V A in body frame) to the world frame with the attitude (without the position)
+        # 向量化：将预测（机体坐标系中的P V A）通过姿态转换到世界坐标系（不包括位置）
         endstate_c = endstate.reshape(-1, 3, 3).transpose(0, 2, 1)  # [N, 9] -> [N, 3, 3] -> [px vx ax, py vy ay, pz vz az]
         endstate_w = np.matmul(self.Rotation_wc, endstate_c)
 
         action_id = np.argmin(score_pred) if self.visualize else 0
-        with self.lock:  # Python3.8: threads are scheduled using time slices, add the lock to ensure safety
+        with self.lock:  # Python3.8：线程使用时间片调度，添加锁以确保安全
             start_pos = self.desire_pos if self.plan_from_reference else np.array((self.odom.pose.pose.position.x, self.odom.pose.pose.position.y, self.odom.pose.pose.position.z))
             start_vel = self.desire_vel if self.plan_from_reference else np.array((self.odom.twist.twist.linear.x, self.odom.twist.twist.linear.y, self.odom.twist.twist.linear.z))
             self.optimal_poly_x = Poly5Solver(start_pos[0], start_vel[0], self.desire_acc[0], endstate_w[action_id, 0, 0] + start_pos[0],
@@ -228,12 +228,12 @@ class YopoNet:
         if self.ctrl_time is None or self.ctrl_time > self.traj_time:
             return
         if self.arrive and self.last_control_msg is not None:
-            self.desire_init = False   # ready for next rollout
+            self.desire_init = False   # 准备下一次运行
             self.last_control_msg.trajectory_flag = self.last_control_msg.TRAJECTORY_STATUS_EMPTY
             self.ctrl_pub.publish(self.last_control_msg)
             return
 
-        with self.lock:  # Python3.8: threads are scheduled using time slices, add the lock to ensure safety and publish frequency
+        with self.lock:  # Python3.8：线程使用时间片调度，添加锁以确保安全和发布频率
             self.ctrl_time += self.ctrl_dt
             control_msg = PositionCommand()
             control_msg.header.stamp = rospy.Time.now()
@@ -278,7 +278,7 @@ class YopoNet:
         dt = self.traj_time / 20.0
         start_pos = self.desire_pos if self.plan_from_reference else np.array((self.odom.pose.pose.position.x, self.odom.pose.pose.position.y, self.odom.pose.pose.position.z))
         start_vel = self.desire_vel if self.plan_from_reference else np.array((self.odom.twist.twist.linear.x, self.odom.twist.twist.linear.y, self.odom.twist.twist.linear.z))
-        # best predicted trajectory
+        # 最佳预测轨迹
         if self.best_traj_pub.get_num_connections() > 0:
             t_values = np.arange(0, self.traj_time, dt)
             points_array = np.stack((
@@ -291,7 +291,7 @@ class YopoNet:
             header.frame_id = 'world'
             point_cloud_msg = point_cloud2.create_cloud_xyz32(header, points_array)
             self.best_traj_pub.publish(point_cloud_msg)
-        # lattice primitive
+        # 格子基元
         if self.visualize and self.lattice_traj_pub.get_num_connections() > 0:
             lattice_endstate = self.lattice_primitive.lattice_pos_node.cpu().numpy()
             lattice_endstate = np.dot(lattice_endstate, self.Rotation_wc.T)
@@ -313,7 +313,7 @@ class YopoNet:
             header.frame_id = 'world'
             point_cloud_msg = point_cloud2.create_cloud_xyz32(header, points_array)
             self.lattice_traj_pub.publish(point_cloud_msg)
-        # all predicted trajectories
+        # 所有预测轨迹
         if self.visualize and self.all_trajs_pub.get_num_connections() > 0:
             all_poly_x = Polys5Solver(start_pos[0], start_vel[0], self.desire_acc[0],
                                       pred_endstate[:, 0, 0] + start_pos[0], pred_endstate[:, 0, 1], pred_endstate[:, 0, 2], self.traj_time)
@@ -347,9 +347,9 @@ class YopoNet:
 
 def parser():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--use_tensorrt", type=int, default=0, help="use tensorrt or not")
-    parser.add_argument("--trial", type=int, default=1, help="trial number")
-    parser.add_argument("--epoch", type=int, default=50, help="epoch number")
+    parser.add_argument("--use_tensorrt", type=int, default=0, help="是否使用tensorrt")
+    parser.add_argument("--trial", type=int, default=1, help="试验编号")
+    parser.add_argument("--epoch", type=int, default=50, help="训练轮数")
     return parser
 
 
@@ -367,7 +367,7 @@ if __name__ == "__main__":
                 'depth_topic': '/depth_image',               # 深度图话题
                 'ctrl_topic': '/so3_control/pos_cmd',        # 控制器话题
                 'plan_from_reference': False,   # 从参考状态规划？位置控制器: True, 神经网络直接控制: False
-                'verbose': False,               # 打印耗时？
-                'visualize': True               # 可视化所有轨迹？(实飞改为False节省计算)
-                }
+                'verbose': False,      # 打印时间消耗
+                'visualize': True}     # 可视化轨迹
+
     YopoNet(settings, weight)

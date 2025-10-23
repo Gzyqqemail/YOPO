@@ -9,7 +9,7 @@
         <param name="kx_z" value="6.2"/>
         <param name="kv_xy" value="3.4"/>
         <param name="kv_z" value="4.0"/>
-        <remap from="~odom" to="/vins_estimator/imu_propagate"/>
+        <remap from="~odom" to="/mavros/local_position/odom"/>
         <remap from="~imu" to="/mavros/imu/data_raw"/>
         <remap from="~position_cmd" to="/so3_control/pos_cmd"/>
         <remap from="~so3_cmd" to="so3_cmd"/>

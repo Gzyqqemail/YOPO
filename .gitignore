@@ -1,4 +1,9 @@
 .idea/
+venv/
+.marscode/
+__pycache__/
+.catkin_workspace
+.vscode/
 
 Controller/devel/
 Controller/build/

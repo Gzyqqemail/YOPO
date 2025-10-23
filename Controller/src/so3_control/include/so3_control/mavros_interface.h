@@ -165,8 +165,8 @@ public:
         at_cmd.thrust = (float)thrust_d;
         at_cmd.orientation.w = q_d.w();
         at_cmd.orientation.x = q_d.x();
-        at_cmd.orientation.y = -q_d.y();
-        at_cmd.orientation.z = -q_d.z();
+        at_cmd.orientation.y = q_d.y();
+        at_cmd.orientation.z = q_d.z();
         att_target_pub.publish(at_cmd);
     }
 
